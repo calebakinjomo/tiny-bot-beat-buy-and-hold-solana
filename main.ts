@@ -65,12 +65,17 @@ function push(bar: Bar): number[] {
 /**
  * Whether the symbol is a buyable dip on this close: under its trailing
  * 14-bar mean by the dip depth, and its trailing 24-bar return no worse
- * than -12% (skip a free-fall: a dip inside a crash keeps dipping).
+ * than -12%. The guard is what keeps a dip-buy from catching a free-fall:
+ * a dip inside a crash keeps dipping, so the bot waits for the fall to
+ * flatten before it steps in.
  */
 function isDip(cs: number[]): boolean {
   if (cs.length < GUARD_BARS + 1) return false;
   const recent = cs.slice(cs.length - MEAN_BARS);
   const mean = recent.reduce((a, x) => a + x, 0) / recent.length;
+  // Defensive: raw closes are always positive, but a non-positive mean
+  // would make the dip test meaningless, so refuse the signal outright.
+  if (!(mean > 0)) return false;
   if (cs[cs.length - 1] * DIP_DEN > mean * DIP_NUM) return false;
   const then = cs[cs.length - 1 - GUARD_BARS];
   return cs[cs.length - 1] * GUARD_DEN >= then * GUARD_NUM;
@@ -114,6 +119,10 @@ await runBars({
     let cash = state.cash;
     for (const symbol of entries) {
       if (room <= 0 || orders.length >= caps.max_orders_per_bar) break;
+      // Defensive: never buy a symbol with no latest close. Entries only
+      // come from bars seen this batch, so this never triggers in practice;
+      // it guards the sizing math against a missing price, not the strategy.
+      if (state.close(symbol) === null) continue;
       let slice = stake < byWeight ? stake : byWeight;
       if (cash < slice) slice = cash;
       if (slice === 0n || slice < BigInt(fees.min_notional_quote_units)) break;
